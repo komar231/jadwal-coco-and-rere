@@ -265,6 +265,11 @@ const other=sl=>sl==='a'?'b':'a';
 const clone=o=>JSON.parse(JSON.stringify(o));
 const pc=st=>st&&st.total?Math.round(st.done/st.total*100):0;
 const str=(v,max)=>typeof v==='string'?v.slice(0,max):'';
+/* Jam diketik sebagai teks 24 jam supaya keyboard angka muncul di HP: "730", "7.30", "19" semuanya diterima */
+function fixTime(v){const p=String(v).trim().split(/[^0-9]+/).filter(Boolean);let hh,mm;
+  if(p.length>=2){hh=p[0];mm=p[1]}else{const d=p[0]||'';if(!d||d.length>4)return'';if(d.length<=2){hh=d;mm='0'}else{hh=d.slice(0,-2);mm=d.slice(-2)}}
+  hh=+hh;mm=+mm;return hh<24&&mm<60?pad(hh)+':'+pad(mm):''}
+function timeIn(id,val){return h('input',{type:'text',id,value:val,inputmode:'numeric',maxlength:5,placeholder:'07:30',autocomplete:'off',required:true,onfocus:e=>e.target.select(),onblur:e=>{const v=fixTime(e.target.value);if(v)e.target.value=v}})}
 
 function h(t,a,...c){const e=document.createElement(t);
   if(a)for(const k in a){const v=a[k];if(v==null||v===false)continue;
@@ -656,7 +661,7 @@ function openEdit(it,date){const sl=S.me,P=S.prof[sl],dlg=$('dlg'),d=dow(date);l
   const err=h('p',{class:'err',id:'e-err',role:'alert',hidden:true});
   const close=()=>{dlg.close()};
   const targets=()=>it?(sib.length&&$('e-all').checked?[it].concat(sib):[it]).map(x=>x.id):[];
-  const save=()=>{const n=$('e-n').value.trim().slice(0,80),st=$('e-s').value,en=$('e-e').value,k=cat.value;
+  const save=()=>{const n=$('e-n').value.trim().slice(0,80),st=fixTime($('e-s').value),en=fixTime($('e-e').value),k=cat.value;
     const fail=m=>{err.textContent=m;err.hidden=false};
     if(!n)return fail('Isi nama kegiatan.');
     if(!TIME.test(st)||!TIME.test(en))return fail('Isi jam mulai dan jam selesai.');
@@ -671,8 +676,8 @@ function openEdit(it,date){const sl=S.me,P=S.prof[sl],dlg=$('dlg'),d=dow(date);l
   dlg.replaceChildren(h('form',{class:'form',method:'dialog',onsubmit:e=>{e.preventDefault();save()}},
     h('h3',{text:it?'Ubah kegiatan':'Tambah kegiatan'}),
     h('div',{class:'field'},h('label',{for:'e-n',text:'Nama kegiatan'}),h('input',{type:'text',id:'e-n',maxlength:80,value:it?it.n:'',autocomplete:'off',required:true})),
-    h('div',{class:'two'},h('div',{class:'field'},h('label',{for:'e-s',text:'Mulai'}),h('input',{type:'time',id:'e-s',value:it?it.s:'08:00',required:true})),
-      h('div',{class:'field'},h('label',{for:'e-e',text:'Selesai'}),h('input',{type:'time',id:'e-e',value:it?it.e:'09:00',required:true}))),
+    h('div',{class:'two'},h('div',{class:'field'},h('label',{for:'e-s',text:'Mulai'}),timeIn('e-s',it?it.s:'08:00')),
+      h('div',{class:'field'},h('label',{for:'e-e',text:'Selesai'}),timeIn('e-e',it?it.e:'09:00'))),
     h('div',{class:'field'},h('label',{for:'e-k',text:'Kategori'}),cat),
     it?(sib.length?h('label',{class:'line',for:'e-all'},h('input',{type:'checkbox',id:'e-all'}),'Terapkan juga ke '+sib.length+' hari lain yang punya kegiatan ini di jam yang sama'):null)
       :h('div',{class:'field'},h('label',{text:'Hari'}),h('div',{class:'dchk',role:'group','aria-label':'Hari'},DSH.map((nm,i)=>h('label',{for:'e-d'+i},h('input',{type:'checkbox',id:'e-d'+i,checked:i===d}),nm))),
