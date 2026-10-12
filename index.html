@@ -63,6 +63,12 @@ body::before{content:"";position:fixed;inset:0;z-index:-1;background:var(--wall,
 .av{border-radius:50%;object-fit:cover;flex:none;display:grid;place-items:center;background:var(--c);color:var(--on);font-family:var(--f-display);font-weight:700;line-height:1}
 .filebtn{color:var(--ink);font-size:inherit;font-weight:500;display:inline-flex;align-items:center;cursor:pointer}
 .vh{position:absolute;opacity:0;width:1px;height:1px}
+.sugl{max-height:17rem;overflow:auto;border:1px solid var(--line);border-radius:10px;padding:0 .2rem 0 .7rem}
+.sugr{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:.5rem;border-top:1px solid var(--line)}
+.sugr:first-child{border-top:0}
+.sugr span{overflow-wrap:anywhere}.sugr small{font-size:.8rem;white-space:nowrap}
+.sugf{display:grid;grid-template-columns:minmax(0,2fr) 5rem 5rem minmax(0,1.3fr) auto;gap:8px}
+@media (max-width:620px){.sugf{grid-template-columns:1fr 1fr}.sugf>:first-child{grid-column:1/-1}}
 .sw.a{background:var(--pa)}.sw.b{background:var(--pb)}
 
 .nav{position:fixed;left:0;right:0;bottom:0;z-index:5;display:flex;background:var(--surface);border-top:1px solid var(--line);padding:4px 6px calc(4px + env(safe-area-inset-bottom,0px))}
@@ -305,6 +311,8 @@ function normProf(p){if(!p||typeof p!=='object')return null;
   const o={name:str(p.name,30).trim(),color:COLORS[p.color]?p.color:'nila',start:DATE.test(p.start)?p.start:today(),items,targets,seq:Math.max(p.seq|0,items.length)};
   if(typeof p.photo==='string'&&p.photo.length<90000&&PHOTO.test(p.photo))o.photo=p.photo;
   if(DATE.test(p.frozen))o.frozen=p.frozen;
+  if(Array.isArray(p.sugAdd))o.sugAdd=p.sugAdd.map(x=>normItem(Object.assign({id:'s',d:0},x))).filter(Boolean).slice(0,60).map(x=>({n:x.n,s:x.s,e:x.e,k:x.k}));
+  if(Array.isArray(p.sugHide))o.sugHide=p.sugHide.map(x=>str(x,80)).filter(Boolean).slice(0,300);
   return o}
 function normLog(l){if(!l||typeof l!=='object'||!DATE.test(l.date))return null;
   const done={},notes={};
@@ -392,13 +400,24 @@ function stat(sl,date){const P=S.prof[sl];if(!P)return null;const t=today();if(d
   if(date>=P.start)return{done:0,total:counted(P,dow(date)).length};
   return null}
 function weekStat(sl,mon){let done=0,total=0;for(let i=0;i<7;i++){const st=stat(sl,addD(mon,i));if(st){done+=st.done;total+=st.total}}return{done,total}}
-function actNames(P){const seen=new Set(),out=[];P.items.filter(x=>x.k!=='lain').sort((a,b)=>mins(a.s)-mins(b.s)).forEach(x=>{if(!seen.has(x.n)){seen.add(x.n);out.push(x.n)}});return out}
-function didAct(sl,date,name){const l=S.logs[sl][date];return!!l&&Object.values(l.done).includes(name)}
-function streak(sl,name){const P=S.prof[sl],sched=new Set(P.items.filter(x=>x.n===name).map(x=>x.d));let d=today(),n=0;
+/* Nama yang hanya ditambahi keterangan ("Cek pasar + tanya ke bou", "Gereja (sore)") dihitung sebagai kegiatan induknya.
+   Induk = nama terpendek yang sudah dikenal dan menjadi awalan, diikuti tanda seperti + ( - , : / */
+let KC={};
+function keyOf(sl,n){let c=KC[sl];
+  if(!c){const P=S.prof[sl],set=new Set();
+    if(P){P.items.forEach(x=>set.add(x.n));(P.sugAdd||[]).forEach(x=>set.add(x.n))}
+    Object.values(S.logs[sl]).forEach(l=>{Object.values(l.done).forEach(v=>set.add(v));(l.items||[]).forEach(x=>set.add(x.n))});
+    c=KC[sl]={list:[...set].sort((a,b)=>a.length-b.length),map:new Map()}}
+  let k=c.map.get(n);
+  if(k===undefined){k=n;for(const m of c.list){if(m.length>=n.length)break;if(n.startsWith(m)&&/^\s*[+(\-–—,:;\/]/.test(n.slice(m.length))){k=m;break}}c.map.set(n,k)}
+  return k}
+function actNames(P,sl){const seen=new Set(),out=[];P.items.filter(x=>x.k!=='lain').sort((a,b)=>mins(a.s)-mins(b.s)).forEach(x=>{const k=keyOf(sl,x.n);if(!seen.has(k)){seen.add(k);out.push(k)}});return out}
+function didAct(sl,date,name){const l=S.logs[sl][date];return!!l&&Object.values(l.done).some(v=>keyOf(sl,v)===name)}
+function streak(sl,name){const P=S.prof[sl],sched=new Set(P.items.filter(x=>keyOf(sl,x.n)===name).map(x=>x.d));let d=today(),n=0;
   if(sched.has(dow(d))&&!didAct(sl,d,name))d=addD(d,-1);
   for(let i=0;i<HIST;i++,d=addD(d,-1)){if(!sched.has(dow(d)))continue;if(didAct(sl,d,name))n++;else break}
   return n}
-function rate30(sl,name){const P=S.prof[sl],sched=new Set(P.items.filter(x=>x.n===name).map(x=>x.d));let sc=0,dn=0,d=today();
+function rate30(sl,name){const P=S.prof[sl],sched=new Set(P.items.filter(x=>keyOf(sl,x.n)===name).map(x=>x.d));let sc=0,dn=0,d=today();
   for(let i=0;i<30;i++,d=addD(d,-1)){if(d<P.start&&!S.logs[sl][d])continue;if(!sched.has(dow(d)))continue;sc++;if(didAct(sl,d,name))dn++}
   return{sc,dn}}
 function nowLine(sl){const P=S.prof[sl];if(!P)return'';const its=dayItems(P,dow(today())),n=nowM();
@@ -414,13 +433,16 @@ const endM=x=>mins(x.e)<=mins(x.s)?mins(x.e)+1440:mins(x.e);
 const prevDay=d=>(d+6)%7;
 /* Berulang = terjadwal di lebih dari satu hari dalam seminggu, atau sudah pernah selesai di lebih dari satu tanggal */
 function recurring(sl,name){const P=S.prof[sl],L=S.logs[sl];
-  if(new Set(P.items.filter(x=>x.n===name).map(x=>x.d)).size>1)return true;
-  let c=0;for(const d in L)if(Object.values(L[d].done).includes(name)&&++c>1)return true;
+  if(new Set(P.items.filter(x=>keyOf(sl,x.n)===name).map(x=>x.d)).size>1)return true;
+  let c=0;for(const d in L)if(didAct(sl,d,name)&&++c>1)return true;
   return false}
 /* Saran nama untuk editor: semua kegiatan di jadwal dan di riwayat, yang paling sering muncul lebih dulu */
 function suggest(sl){const m=new Map(),add=x=>{const c=m.get(x.n);if(c)c.c++;else m.set(x.n,{s:x.s,e:x.e,k:x.k,c:1})};
-  S.prof[sl].items.forEach(add);Object.values(S.logs[sl]).forEach(l=>(l.items||[]).forEach(add));
-  return new Map([...m].sort((a,b)=>b[1].c-a[1].c).slice(0,80))}
+  const P=S.prof[sl],hide=new Set(P.sugHide||[]),out=new Map();
+  P.items.forEach(add);Object.values(S.logs[sl]).forEach(l=>(l.items||[]).forEach(add));
+  (P.sugAdd||[]).forEach(x=>out.set(x.n,{s:x.s,e:x.e,k:x.k,c:0,own:true}));
+  [...m].sort((a,b)=>b[1].c-a[1].c).forEach(p=>{if(!hide.has(p[0])&&!out.has(p[0]))out.set(p[0],p[1])});
+  return new Map([...out].slice(0,120))}
 function avatar(sl,size){const P=S.prof[sl],st='width:'+size+'px;height:'+size+'px;font-size:'+Math.round(size*.45)+'px;--c:var(--p'+sl+')';
   return P&&P.photo?h('img',{class:'av',src:P.photo,alt:'',style:st}):h('span',{class:'av',style:st,'aria-hidden':'true'},(pname(sl)[0]||'?').toUpperCase())}
 function readImg(file,max,square,q){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;
@@ -515,7 +537,7 @@ function arm(key,fn){if(S.arm===key){S.arm=null;clearTimeout(arm.t);fn();return}
 let raf=0;
 function busy(){const a=document.activeElement;return $('dlg').open||(!!a&&$('view').contains(a)&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)&&a.type!=='checkbox')}
 function changed(){saveCache();if(busy()){S.stale=true;return}if(raf)return;raf=setTimeout(()=>{raf=0;if(busy()){S.stale=true;return}render()},30)}
-function render(){S.stale=false;
+function render(){S.stale=false;KC={};
   const R=document.documentElement;R.dataset.ca=(S.prof.a&&S.prof.a.color)||'nila';R.dataset.cb=(S.prof.b&&S.prof.b.color)||'mawar';
   const solo=S.tab==='kita'||S.tab==='atur';
   $('app').className=solo?(S.me==='b'?'vb':'va'):'v'+S.view;
@@ -634,8 +656,8 @@ function chart(data,label){const W=640,H=230,L=36,Rr=12,T=12,B=28,n=data.labels.
   return svg}
 
 function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
-  const t=today(),mon=monday(t),wk=weekStat(sl,mon),lw=weekStat(sl,addD(mon,-7)),acts=actNames(P);
-  const rows=acts.map(n=>{let sc=0,dn=0;for(let i=0;i<7;i++){const d=addD(mon,i);if(d>t)break;if(d<P.start&&!S.logs[sl][d])continue;if(!P.items.some(x=>x.d===i&&x.n===n))continue;sc++;if(didAct(sl,d,n))dn++}return{n,sc,dn}}).filter(r=>r.sc);
+  const t=today(),mon=monday(t),wk=weekStat(sl,mon),lw=weekStat(sl,addD(mon,-7)),acts=actNames(P,sl);
+  const rows=acts.map(n=>{let sc=0,dn=0;for(let i=0;i<7;i++){const d=addD(mon,i);if(d>t)break;if(d<P.start&&!S.logs[sl][d])continue;if(!P.items.some(x=>x.d===i&&keyOf(sl,x.n)===n))continue;sc++;if(didAct(sl,d,n))dn++}return{n,sc,dn}}).filter(r=>r.sc);
   const best=rows.filter(r=>r.dn).sort((a,b)=>b.dn/b.sc-a.dn/a.sc||b.dn-a.dn)[0];
   const worst=rows.filter(r=>r.sc>r.dn).sort((a,b)=>(b.sc-b.dn)-(a.sc-a.dn)||a.dn/a.sc-b.dn/b.sc)[0];
   const diff=lw.total?pc(wk)-pc(lw):null;
@@ -647,7 +669,7 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
   const sel=h('select',{id:'hm-s','aria-label':'Kegiatan untuk peta kalender',onchange:e=>{S.hm=e.target.value;render()}},h('option',{value:''},'Semua kegiatan'),acts.map(n=>h('option',{value:n},n)));sel.value=S.hm;
   const hmStart=addD(mon,-17*7),cells=[];
   for(let i=0;i<126;i++){const d=addD(hmStart,i);let cls='fut',tip=nice(d);
-    if(d<=t){if(S.hm){const sch=P.items.some(x=>x.d===dow(d)&&x.n===S.hm),dn=didAct(sl,d,S.hm);
+    if(d<=t){if(S.hm){const sch=P.items.some(x=>x.d===dow(d)&&keyOf(sl,x.n)===S.hm),dn=didAct(sl,d,S.hm);
         cls=dn?'l4':(sch&&(d>=P.start||S.logs[sl][d])?'':'na');tip+=dn?': selesai':(cls===''?': terlewat':': tidak terjadwal')}
       else{const x=stat(sl,d);if(!x||!x.total){cls='na';tip+=': belum ada data'}else{const p=pc(x);cls=p===0?'':p<34?'l1':p<67?'l2':p<100?'l3':'l4';tip+=': '+p+'%'}}}
     cells.push(h('i',{class:cls,title:tip}))}
@@ -668,7 +690,7 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
         h('tbody',null,shown.map(r=>h('tr',null,h('td',{text:r.n}),h('td',{class:'n',text:r.s?r.s+'×':'–'}),h('td',{class:'n',text:r.r.sc?r.r.dn+'/'+r.r.sc:'–'})))))
         :h('p',{class:'muted',text:'Belum ada kegiatan berulang.'}),
       st.length>8?h('div',{class:'btns',style:'margin-top:10px'},h('button',{class:'btn',type:'button',id:'st-all',onclick:()=>{S.all=!S.all;render()}},S.all?'Tampilkan 8 teratas':'Tampilkan semua ('+st.length+')')):null,
-      h('p',{class:'muted',style:'font-size:.82rem;margin-top:8px',text:'Streak menghitung jadwal berturut-turut yang selesai, dan hari tanpa jadwal kegiatan itu dilewati. Hanya kegiatan berulang yang tampil: terjadwal di lebih dari satu hari, atau sudah selesai di lebih dari satu tanggal.'})),
+      h('p',{class:'muted',style:'font-size:.82rem;margin-top:8px',text:'Streak menghitung jadwal berturut-turut yang selesai, dan hari tanpa jadwal kegiatan itu dilewati. Hanya kegiatan berulang yang tampil: terjadwal di lebih dari satu hari, atau sudah selesai di lebih dari satu tanggal. Nama yang hanya ditambahi keterangan, misal "Gereja + makan" atau "Gereja (sore)", dihitung sebagai kegiatan induknya.'})),
     h('section',{class:'card'},h('div',{class:'hd'},h('h3',{text:'Peta kalender 18 minggu'}),h('div',{style:'flex:0 1 16rem;min-width:0'},sel)),
       h('div',{class:'scroll'},h('div',{class:'hm',role:'img','aria-label':'Peta kalender penyelesaian per hari'},cells)),
       h('div',{class:'hmk'},'Sedikit',h('div',{class:'hm'},h('i'),h('i',{class:'l1'}),h('i',{class:'l2'}),h('i',{class:'l3'}),h('i',{class:'l4'})),'Semua selesai'))]}
@@ -676,7 +698,7 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
 function viewKita(){const t=today(),mon=monday(t);
   const cards=['a','b'].map(sl=>{const P=S.prof[sl];
     if(!P)return h('section',{class:'card duo-c v'+sl},h('h3',{text:pname(sl)}),h('p',{class:'muted',text:S.db&&!S.ready[sl]?'Memuat…':'Profil ini belum dibuat.'}));
-    const st=stat(sl,t),wk=weekStat(sl,mon),top=actNames(P).filter(n=>recurring(sl,n)).map(n=>({n,s:streak(sl,n)})).sort((a,b)=>b.s-a.s)[0];
+    const st=stat(sl,t),wk=weekStat(sl,mon),top=actNames(P,sl).filter(n=>recurring(sl,n)).map(n=>({n,s:streak(sl,n)})).sort((a,b)=>b.s-a.s)[0];
     return h('section',{class:'card duo-c v'+sl},
       h('div',{class:'duo-h'},ring1(pc(st),'var(--acc)',72),h('div',{style:'min-width:0'},h('h3',{style:'display:flex;align-items:center;gap:.5rem'},avatar(sl,28),pname(sl)),h('p',{class:'muted num',text:(st?st.done+' dari '+st.total:'0')+' hari ini · minggu ini '+pc(wk)+'%'}))),
       h('p',{text:nowLine(sl)}),
@@ -708,7 +730,14 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
     h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'sw-me',onclick:()=>arm('swme',()=>{lsSet('jb-me',other(S.me));location.reload()})},S.arm==='swme'?'Ketuk lagi untuk pindah profil':'Pindah ke profil satunya'),
       h('button',{class:'btn danger',type:'button',id:'rm-out',onclick:()=>arm('out',()=>{lsSet('jb-room',null);lsSet('jb-me',null);lsSet('jb-cache',null);location.reload()})},S.arm==='out'?'Ketuk lagi untuk keluar':'Keluar dari ruang di perangkat ini')));
   if(!P||!can)return[P?null:(sl&&can?setupCard(sl):empty('Pengaturan belum tersedia',S.db?'Buat profilmu dulu, atau minta akses Editor.':'Sambungkan dulu ke penyimpanan bersama.')),access];
-  const acts=actNames(P),no=nset(),nOn=no.on&&nOk();
+  const acts=actNames(P,sl),no=nset(),nOn=no.on&&nOk(),sg=[...suggest(sl)],nHide=(P.sugHide||[]).length;
+  const sgk=h('select',{id:'sg-k','aria-label':'Kategori saran baru'},Object.keys(CATS).map(k=>h('option',{value:k},CATS[k])));sgk.value='rutin';
+  const sgDrop=(n)=>{const p=clone(P);p.sugAdd=(p.sugAdd||[]).filter(x=>x.n!==n);p.sugHide=(p.sugHide||[]).filter(x=>x!==n).concat(n);updateProf(p)};
+  const sgAdd=()=>{const n=$('sg-n').value.trim().slice(0,80),st=fixTime($('sg-s').value),en=fixTime($('sg-e').value);
+    if(!n){toast('Isi nama kegiatan untuk saran baru.');return}
+    if(!st||!en||st===en){toast('Isi jam mulai dan jam selesai yang berbeda.');return}
+    const p=clone(P);p.sugHide=(p.sugHide||[]).filter(x=>x!==n);p.sugAdd=(p.sugAdd||[]).filter(x=>x.n!==n).concat({n,s:st,e:en,k:sgk.value});
+    S.focus='sg-n';$('sg-n').blur();updateProf(p);toast('Saran ditambahkan.')};
   return[h('section',{class:'card stack'},h('h3',{text:'Profil'}),
       h('div',{class:'field'},h('label',{for:'pf-n',text:'Nama panggilan'}),h('input',{type:'text',id:'pf-n',maxlength:30,value:P.name,autocomplete:'off',onchange:e=>{const p=clone(P);p.name=e.target.value.trim().slice(0,30);updateProf(p)}})),
       h('div',{class:'field'},h('label',{for:'pf-p',text:'Foto profil'}),h('div',{class:'btns',style:'align-items:center'},avatar(sl,56),
@@ -743,6 +772,17 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
         h('input',{type:'text',id:'tg-new',maxlength:60,placeholder:acts[0]?'Misal: '+acts[0]:'Nama kegiatan','aria-label':'Teks kegiatan target baru'}),
         h('input',{type:'number',id:'tg-newt',min:1,max:99,value:7,'aria-label':'Jumlah per minggu'}),
         h('button',{class:'btn',type:'submit',id:'tg-add'},'Tambah'))),
+    h('section',{class:'card stack'},h('h3',{text:'Saran kegiatan'}),
+      h('p',{class:'muted',style:'max-width:65ch',text:'Daftar ini muncul sebagai saran saat kamu menambah kegiatan. Isinya otomatis dari jadwal dan riwayatmu, dan bisa kamu tambah atau hapus sendiri. Menghapus saran tidak menghapus kegiatan dari jadwal.'}),
+      sg.length?h('div',{class:'sugl'},sg.map((p,i)=>h('div',{class:'sugr'},
+          h('span',null,p[0],' ',h('small',{class:'muted',text:p[1].s+'–'+p[1].e+' · '+CATS[p[1].k]+(p[1].own?' · buatanmu':'')})),
+          h('button',{class:'ib',type:'button',id:'sg-x'+i,'aria-label':'Hapus saran '+p[0],title:'Hapus saran',onclick:()=>sgDrop(p[0])},icon('<path d="M6 6l12 12M18 6L6 18"/>')))))
+        :h('p',{class:'muted',text:'Belum ada saran. Tambahkan lewat formulir di bawah.'}),
+      nHide?h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'sg-re',onclick:()=>{const p=clone(P);p.sugHide=[];updateProf(p)}},'Pulihkan '+nHide+' saran yang dihapus')):null,
+      h('form',{class:'sugf',onsubmit:e=>{e.preventDefault();sgAdd()}},
+        h('input',{type:'text',id:'sg-n',maxlength:80,placeholder:'Nama kegiatan baru','aria-label':'Nama saran baru',autocomplete:'off'}),
+        timeIn('sg-s','08:00'),timeIn('sg-e','09:00'),sgk,
+        h('button',{class:'btn',type:'submit',id:'sg-add'},'Tambah'))),
     h('section',{class:'card stack'},h('h3',{text:'Cadangan data'}),
       h('p',{class:'muted',style:'max-width:65ch',text:'Ekspor menyimpan profil dan seluruh riwayat centangmu ke satu berkas JSON. Impor menimpa profilmu dengan isi berkas itu.'}),
       h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'ex',onclick:exportData},'Ekspor JSON'),
