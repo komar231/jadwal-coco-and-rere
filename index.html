@@ -304,12 +304,15 @@ function normProf(p){if(!p||typeof p!=='object')return null;
   const targets=(Array.isArray(p.targets)?p.targets:[]).map(t=>t&&typeof t==='object'?{n:str(t.n,60).trim(),t:Math.min(99,Math.max(1,t.t|0))}:null).filter(t=>t&&t.n).slice(0,30);
   const o={name:str(p.name,30).trim(),color:COLORS[p.color]?p.color:'nila',start:DATE.test(p.start)?p.start:today(),items,targets,seq:Math.max(p.seq|0,items.length)};
   if(typeof p.photo==='string'&&p.photo.length<90000&&PHOTO.test(p.photo))o.photo=p.photo;
+  if(DATE.test(p.frozen))o.frozen=p.frozen;
   return o}
 function normLog(l){if(!l||typeof l!=='object'||!DATE.test(l.date))return null;
   const done={},notes={};
   if(l.done&&typeof l.done==='object')for(const k in l.done)done[k]=str(l.done[k],80)||'-';
   if(l.notes&&typeof l.notes==='object')for(const k in l.notes){const v=str(l.notes[k],140);if(v)notes[k]=v}
-  return{date:l.date,total:Math.max(0,l.total|0),count:Math.max(0,l.count|0),done,notes}}
+  const o={date:l.date,total:Math.max(0,l.total|0),count:Math.max(0,l.count|0),done,notes};
+  if(Array.isArray(l.items))o.items=l.items.map(normItem).filter(Boolean).slice(0,100);
+  return o}
 function expand(t){const items=[];let seq=0;const sh={};
   (Array.isArray(t.shift)?t.shift:[]).forEach(x=>{if(x)sh[x.d+'|'+x.from]=x});
   for(let d=0;d<7;d++)(Array.isArray(t.daily)?t.daily:[]).forEach(x=>{if(!x)return;const m=sh[d+'|'+x.s];items.push({id:'i'+(++seq),d,s:m?m.s:x.s,e:m?m.e:x.e,n:x.n,k:x.k})});
@@ -340,6 +343,8 @@ function subscribe(){const db=S.db,cut=addD(today(),-HIST);
       qs.docs.forEach(d=>{const x=normLog(d.data());if(x)m[x.date]=x});
       const pre='profiles/'+sl+'/log/';for(const p in Q)if(p.indexOf(pre)===0){const dt=p.slice(pre.length);if(S.logs[sl][dt])m[dt]=S.logs[sl][dt]}
       S.logs[sl]=m;changed()},subErr)});
+  db.doc('settings/wall').onSnapshot(sn=>{if(!sn.exists)return;const w=sn.data()||{};
+    if(w.key==='photo'?PHOTO.test(w.img||''):!!WALLS[w.key]){storeWall(w);changed()}},subErr);
   db.collection('cheers').where('date','>=',addD(today(),-30)).onSnapshot(qs=>{
     S.cheers=qs.docs.map(d=>{const c=d.data()||{};return DATE.test(c.date)&&(c.from==='a'||c.from==='b')?{id:d.id,date:c.date,from:c.from,emoji:EMO.includes(c.emoji)?c.emoji:EMO[0],text:str(c.text,80),ts:+c.ts||0}:null}).filter(Boolean)
       .sort((x,y)=>y.date.localeCompare(x.date)||y.ts-x.ts);changed()},subErr)}
@@ -407,6 +412,15 @@ const counted=(P,d)=>P.items.filter(x=>x.d===d&&x.k!=='lain');
 /* Jam selesai yang lebih awal dari jam mulai berarti kegiatan berlanjut sampai besoknya */
 const endM=x=>mins(x.e)<=mins(x.s)?mins(x.e)+1440:mins(x.e);
 const prevDay=d=>(d+6)%7;
+/* Berulang = terjadwal di lebih dari satu hari dalam seminggu, atau sudah pernah selesai di lebih dari satu tanggal */
+function recurring(sl,name){const P=S.prof[sl],L=S.logs[sl];
+  if(new Set(P.items.filter(x=>x.n===name).map(x=>x.d)).size>1)return true;
+  let c=0;for(const d in L)if(Object.values(L[d].done).includes(name)&&++c>1)return true;
+  return false}
+/* Saran nama untuk editor: semua kegiatan di jadwal dan di riwayat, yang paling sering muncul lebih dulu */
+function suggest(sl){const m=new Map(),add=x=>{const c=m.get(x.n);if(c)c.c++;else m.set(x.n,{s:x.s,e:x.e,k:x.k,c:1})};
+  S.prof[sl].items.forEach(add);Object.values(S.logs[sl]).forEach(l=>(l.items||[]).forEach(add));
+  return new Map([...m].sort((a,b)=>b[1].c-a[1].c).slice(0,80))}
 function avatar(sl,size){const P=S.prof[sl],st='width:'+size+'px;height:'+size+'px;font-size:'+Math.round(size*.45)+'px;--c:var(--p'+sl+')';
   return P&&P.photo?h('img',{class:'av',src:P.photo,alt:'',style:st}):h('span',{class:'av',style:st,'aria-hidden':'true'},(pname(sl)[0]||'?').toUpperCase())}
 function readImg(file,max,square,q){return new Promise((res,rej)=>{const r=new FileReader();r.onerror=rej;
@@ -429,18 +443,30 @@ function applyWall(){const k=wallKey(),R=document.documentElement;let v='';
     if(PHOTO.test(d)){const sc='color-mix(in srgb,var(--bg) 68%,transparent)';v='linear-gradient('+sc+','+sc+'),url("'+d+'") center/cover no-repeat'}}
   else if(WALLS[k])v=WALLS[k][1];
   if(v)R.style.setProperty('--wall',v);else R.style.removeProperty('--wall')}
+/* Latar disimpan di ruang supaya sama di semua perangkat; salinan lokal hanya untuk tampil cepat saat dibuka */
+function storeWall(w){lsSet('jb-wall',w.key);if(w.key==='photo')lsSet('jb-wall-img',w.img);applyWall()}
+function setWall(w){storeWall(w);put('settings/wall',Object.assign({by:S.me,ts:Date.now()},w));render()}
 
 /* ---------- aksi ---------- */
-function commitLog(date,log){const sl=S.me,ids=new Set(counted(S.prof[sl],dow(date)).map(x=>x.id));
+function commitLog(date,log){const sl=S.me,base=log.items||S.prof[sl].items.filter(x=>x.d===dow(date)),ids=new Set(base.filter(x=>x.k!=='lain').map(x=>x.id));
   log.total=ids.size;log.count=Object.keys(log.done).filter(k=>ids.has(k)).length;
   S.logs[sl][date]=log;put('profiles/'+sl+'/log/'+date,log);saveCache()}
-function draftLog(date){const cur=S.logs[S.me][date];return{date,total:0,count:0,done:Object.assign({},cur&&cur.done),notes:Object.assign({},cur&&cur.notes)}}
+function draftLog(date){const cur=S.logs[S.me][date],o={date,total:0,count:0,done:Object.assign({},cur&&cur.done),notes:Object.assign({},cur&&cur.notes)};
+  if(cur&&cur.items)o.items=cur.items;return o}
+/* Sebelum jadwal berubah, jadwal lama dibekukan ke catatan tiap hari yang sudah lewat, supaya riwayatnya tidak ikut berubah */
+function freeze(old){const sl=S.me,t=today(),min=addD(t,-HIST);let d=old.frozen&&old.frozen>=old.start?addD(old.frozen,1):old.start;if(d<min)d=min;
+  for(;d<t;d=addD(d,1)){const cur=S.logs[sl][d];if(cur&&cur.items)continue;
+    const its=old.items.filter(x=>x.d===dow(d));if(!cur&&!its.length)continue;
+    const log=draftLog(d);log.items=clone(its);commitLog(d,log)}
+  return addD(t,-1)}
 function toggle(date,it,on){const log=draftLog(date);if(on)log.done[it.id]=it.n;else delete log.done[it.id];
   commitLog(date,log);S.just=on?it.id:null;render()}
 function saveNote(date,it,val){val=val.trim().slice(0,140);const log=draftLog(date);S.noteOpen=null;
   if((log.notes[it.id]||'')===val){render();return}
   if(val)log.notes[it.id]=val;else delete log.notes[it.id];commitLog(date,log);render()}
-function updateProf(P){const sl=S.me;S.prof[sl]=P;put('profiles/'+sl,P);
+function updateProf(P){const sl=S.me,old=S.prof[sl];
+  if(old&&JSON.stringify(old.items)!==JSON.stringify(P.items))P.frozen=freeze(old);
+  S.prof[sl]=P;put('profiles/'+sl,P);
   const t=today(),log=S.logs[sl][t];
   if(log){const ids=new Set(counted(P,dow(t)).map(x=>x.id)),cnt=Object.keys(log.done).filter(k=>ids.has(k)).length;
     if(cnt!==log.count||ids.size!==log.total)commitLog(t,draftLog(t))}
@@ -496,7 +522,8 @@ function ring1(p,col,size){const r=42,c=2*Math.PI*r;
     p>0?s('circle',{cx:50,cy:50,r,fill:'none',style:'stroke:'+col,'stroke-width':9,'stroke-linecap':'round','stroke-dasharray':(p/100*c).toFixed(1)+' 999',transform:'rotate(-90 50 50)'}):null,
     s('text',{x:50,y:57,'text-anchor':'middle',class:'ringt'},p+'%'))}
 
-function dayList(sl,date,filter){const P=S.prof[sl],t=today(),can=mine(sl),all=dayItems(P,dow(date)),log=S.logs[sl][date],n=nowM();
+function dayList(sl,date,filter){const P=S.prof[sl],t=today(),can=mine(sl),log=S.logs[sl][date],n=nowM(),
+    all=date<t&&log&&log.items?log.items.slice().sort((a,b)=>mins(a.s)-mins(b.s)||mins(a.e)-mins(b.e)):dayItems(P,dow(date));
   const clash=new Set();for(let i=0;i<all.length;i++)for(let j=i+1;j<all.length;j++)if(mins(all[i].s)<endM(all[j])&&mins(all[j].s)<endM(all[i])){clash.add(all[i].id);clash.add(all[j].id)}
   const spill=dayItems(P,prevDay(dow(date))).filter(x=>endM(x)>1440);
   all.forEach(x=>{if(spill.some(p=>mins(x.s)<endM(p)-1440))clash.add(x.id)});
@@ -518,7 +545,7 @@ function dayList(sl,date,filter){const P=S.prof[sl],t=today(),can=mine(sl),all=d
           :(note?h('div',{class:'note',text:note}):null)),
       can?h('div',{class:'acts'},
         date<=t?h('button',{class:'ib',type:'button',id:'nb-'+x.id,'aria-label':'Tulis catatan untuk '+x.n,title:'Catatan',onclick:()=>{S.noteOpen=key;S.focus='n-'+x.id;render()}},icon('<path d="M5 19l1-4L16.5 4.5a2.1 2.1 0 013 3L9 18z"/>')):null,
-        h('button',{class:'ib',type:'button',id:'eb-'+x.id,'aria-label':'Ubah '+x.n,title:'Ubah',onclick:()=>openEdit(x,date)},icon('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'))):null)}))}
+        date<t?null:h('button',{class:'ib',type:'button',id:'eb-'+x.id,'aria-label':'Ubah '+x.n,title:'Ubah',onclick:()=>openEdit(x,date)},icon('<circle cx="5" cy="12" r="1.3"/><circle cx="12" cy="12" r="1.3"/><circle cx="19" cy="12" r="1.3"/>'))):null)}))}
 function addBtn(sl,date){return mine(sl)?h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'add',onclick:()=>openEdit(null,date)},'+ Tambah kegiatan')):null}
 
 function viewHari(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
@@ -548,7 +575,8 @@ function viewMinggu(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
     cats.length>1?h('div',{class:'chips',role:'group','aria-label':'Saring kategori'},
       h('button',{class:'chip',type:'button',id:'f-all','aria-pressed':String(!S.filter),onclick:()=>{S.filter=null;render()}},'Semua'),
       cats.map(k=>h('button',{class:'chip',type:'button',id:'f-'+k,'aria-pressed':String(S.filter===k),style:'--k:var(--k-'+k+')',onclick:()=>{S.filter=S.filter===k?null:k;render()}},h('i',{class:'dot'}),CATS[k]))):null,
-    h('section',{class:'card'},h('h3',{text:nice(date)}),dayList(sl,date,S.filter)),addBtn(sl,date)]}
+    h('section',{class:'card'},h('h3',{text:nice(date)}),dayList(sl,date,S.filter)),
+    date<t?h('p',{class:'muted',style:'font-size:.82rem;max-width:65ch',text:'Hari yang sudah lewat menampilkan jadwal pada saat itu. Perubahan jadwal hanya berlaku mulai hari ini dan seterusnya.'}):addBtn(sl,date)]}
 
 function trendData(mode){const t=today(),labels=[],A=[],B=[],C=[];
   const val=st=>st&&st.total?st.done/st.total*100:null;
@@ -580,7 +608,7 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
   const diff=lw.total?pc(wk)-pc(lw):null;
   const data=trendData(S.trend);
   const tg=P.targets.map(g=>{const q=g.n.toLowerCase();let c=0;for(let i=0;i<7;i++){const l=S.logs[sl][addD(mon,i)];if(l)c+=Object.values(l.done).filter(n=>n.toLowerCase().includes(q)).length}return{n:g.n,t:g.t,c}});
-  const st=acts.map(n=>({n,s:streak(sl,n),r:rate30(sl,n)})).sort((a,b)=>b.s-a.s||(b.r.sc?b.r.dn/b.r.sc:0)-(a.r.sc?a.r.dn/a.r.sc:0));
+  const st=acts.filter(n=>recurring(sl,n)).map(n=>({n,s:streak(sl,n),r:rate30(sl,n)})).sort((a,b)=>b.s-a.s||(b.r.sc?b.r.dn/b.r.sc:0)-(a.r.sc?a.r.dn/a.r.sc:0));
   const shown=S.all?st:st.slice(0,8);
   if(S.hm&&!acts.includes(S.hm))S.hm='';
   const sel=h('select',{id:'hm-s','aria-label':'Kegiatan untuk peta kalender',onchange:e=>{S.hm=e.target.value;render()}},h('option',{value:''},'Semua kegiatan'),acts.map(n=>h('option',{value:n},n)));sel.value=S.hm;
@@ -605,9 +633,9 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
     h('section',{class:'card'},h('h3',{text:'Streak per kegiatan'}),
       st.length?h('table',null,h('thead',null,h('tr',null,h('th',{text:'Kegiatan'}),h('th',{class:'n',text:'Streak'}),h('th',{class:'n',text:'30 hari'}))),
         h('tbody',null,shown.map(r=>h('tr',null,h('td',{text:r.n}),h('td',{class:'n',text:r.s?r.s+'×':'–'}),h('td',{class:'n',text:r.r.sc?r.r.dn+'/'+r.r.sc:'–'})))))
-        :h('p',{class:'muted',text:'Belum ada kegiatan.'}),
+        :h('p',{class:'muted',text:'Belum ada kegiatan berulang.'}),
       st.length>8?h('div',{class:'btns',style:'margin-top:10px'},h('button',{class:'btn',type:'button',id:'st-all',onclick:()=>{S.all=!S.all;render()}},S.all?'Tampilkan 8 teratas':'Tampilkan semua ('+st.length+')')):null,
-      h('p',{class:'muted',style:'font-size:.82rem;margin-top:8px',text:'Streak menghitung jadwal berturut-turut yang selesai. Hari tanpa jadwal kegiatan itu dilewati.'})),
+      h('p',{class:'muted',style:'font-size:.82rem;margin-top:8px',text:'Streak menghitung jadwal berturut-turut yang selesai, dan hari tanpa jadwal kegiatan itu dilewati. Hanya kegiatan berulang yang tampil: terjadwal di lebih dari satu hari, atau sudah selesai di lebih dari satu tanggal.'})),
     h('section',{class:'card'},h('div',{class:'hd'},h('h3',{text:'Peta kalender 18 minggu'}),h('div',{style:'flex:0 1 16rem;min-width:0'},sel)),
       h('div',{class:'scroll'},h('div',{class:'hm',role:'img','aria-label':'Peta kalender penyelesaian per hari'},cells)),
       h('div',{class:'hmk'},'Sedikit',h('div',{class:'hm'},h('i'),h('i',{class:'l1'}),h('i',{class:'l2'}),h('i',{class:'l3'}),h('i',{class:'l4'})),'Semua selesai'))]}
@@ -615,7 +643,7 @@ function viewProgres(){const sl=S.view,P=S.prof[sl];if(!P)return noProfile(sl);
 function viewKita(){const t=today(),mon=monday(t);
   const cards=['a','b'].map(sl=>{const P=S.prof[sl];
     if(!P)return h('section',{class:'card duo-c v'+sl},h('h3',{text:pname(sl)}),h('p',{class:'muted',text:S.db&&!S.ready[sl]?'Memuat…':'Profil ini belum dibuat.'}));
-    const st=stat(sl,t),wk=weekStat(sl,mon),top=actNames(P).map(n=>({n,s:streak(sl,n)})).sort((a,b)=>b.s-a.s)[0];
+    const st=stat(sl,t),wk=weekStat(sl,mon),top=actNames(P).filter(n=>recurring(sl,n)).map(n=>({n,s:streak(sl,n)})).sort((a,b)=>b.s-a.s)[0];
     return h('section',{class:'card duo-c v'+sl},
       h('div',{class:'duo-h'},ring1(pc(st),'var(--acc)',72),h('div',{style:'min-width:0'},h('h3',{style:'display:flex;align-items:center;gap:.5rem'},avatar(sl,28),pname(sl)),h('p',{class:'muted num',text:(st?st.done+' dari '+st.total:'0')+' hari ini · minggu ini '+pc(wk)+'%'}))),
       h('p',{text:nowLine(sl)}),
@@ -657,13 +685,13 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
         P.photo?h('button',{class:'btn',type:'button',id:'pf-px',onclick:()=>{const p=clone(P);delete p.photo;updateProf(p)}},'Hapus foto'):null)),
       h('div',{class:'field'},h('label',{text:'Warna profil'}),h('div',{class:'sws',role:'group','aria-label':'Warna profil'},Object.keys(COLORS).map(c=>h('button',{type:'button',id:'col-'+c,style:'--c:var(--c-'+c+')','aria-pressed':String(P.color===c),'aria-label':COLORS[c],title:COLORS[c],onclick:()=>{const p=clone(P);p.color=c;updateProf(p)}}))))),
     h('section',{class:'card stack'},h('h3',{text:'Latar halaman'}),
-      h('p',{class:'muted',style:'max-width:65ch',text:'Latar hanya berlaku di perangkat ini, jadi HP dan laptop bisa berbeda.'+(wallKey()==='photo'?' Saat ini memakai fotomu sendiri.':'')}),
+      h('p',{class:'muted',style:'max-width:65ch',text:'Latar berlaku untuk kalian berdua di semua perangkat. Siapa pun dari kalian bisa menggantinya.'+(wallKey()==='photo'?' Saat ini memakai fotomu sendiri.':'')}),
       h('div',{class:'sws',role:'group','aria-label':'Latar halaman'},Object.keys(WALLS).map(k=>h('button',{type:'button',id:'wl-'+k,style:'background:'+(WALLS[k][1]||'var(--bg)'),
-        'aria-pressed':String(wallKey()===k),'aria-label':'Latar '+WALLS[k][0],title:WALLS[k][0],onclick:()=>{lsSet('jb-wall',k);applyWall();render()}}))),
+        'aria-pressed':String(wallKey()===k),'aria-label':'Latar '+WALLS[k][0],title:WALLS[k][0],onclick:()=>setWall({key:k})}))),
       h('div',{class:'btns'},h('label',{class:'btn filebtn',for:'wl-f'},'Pakai foto sendiri'),
         h('input',{type:'file',id:'wl-f',accept:'image/*',class:'vh',onchange:e=>{const f=e.target.files&&e.target.files[0];if(!f)return;
-          readImg(f,1400,false,.72).then(d=>{try{localStorage.setItem('jb-wall-img',d);localStorage.setItem('jb-wall','photo')}catch(x){toast('Foto itu terlalu besar untuk disimpan di perangkat ini.');return}
-            applyWall();render();toast('Latar diganti.')},()=>toast('Gambar itu tidak bisa dibaca.'))}}))),
+          readImg(f,1280,false,.7).then(d=>{if(d.length>900000){toast('Foto itu terlalu besar. Pilih foto lain.');return}
+            setWall({key:'photo',img:d});toast('Latar diganti untuk kalian berdua.')},()=>toast('Gambar itu tidak bisa dibaca.'))}}))),
     h('section',{class:'card'},h('h3',{text:'Target mingguan'}),
       h('p',{class:'muted',style:'margin-bottom:10px;max-width:65ch',text:'Target menghitung semua kegiatan yang namanya mengandung teks ini. Misal "boxing" mencakup Boxing dan Latihan boxing.'}),
       P.targets.map((g,i)=>h('div',{class:'trow'},
@@ -706,7 +734,7 @@ function resetTpl(){const sl=S.me,t=S.tpl[sl];
 
 /* ---------- editor kegiatan ---------- */
 function openEdit(it,date){const sl=S.me,P=S.prof[sl],dlg=$('dlg'),d=dow(date);let armed=false;
-  const sib=it?P.items.filter(x=>x.id!==it.id&&x.n===it.n&&x.s===it.s&&x.e===it.e):[];
+  const sug=suggest(sl),sib=it?P.items.filter(x=>x.id!==it.id&&x.n===it.n&&x.s===it.s&&x.e===it.e):[];
   const cat=h('select',{id:'e-k'},Object.keys(CATS).map(k=>h('option',{value:k},CATS[k])));cat.value=it?it.k:'rutin';
   const err=h('p',{class:'err',id:'e-err',role:'alert',hidden:true});
   const close=()=>{dlg.close()};
@@ -725,7 +753,10 @@ function openEdit(it,date){const sl=S.me,P=S.prof[sl],dlg=$('dlg'),d=dow(date);l
     const ids=new Set(targets()),p=clone(P);p.items=p.items.filter(x=>!ids.has(x.id));close();updateProf(p)};
   dlg.replaceChildren(h('form',{class:'form',method:'dialog',onsubmit:e=>{e.preventDefault();save()}},
     h('h3',{text:it?'Ubah kegiatan':'Tambah kegiatan'}),
-    h('div',{class:'field'},h('label',{for:'e-n',text:'Nama kegiatan'}),h('input',{type:'text',id:'e-n',maxlength:80,value:it?it.n:'',autocomplete:'off',required:true})),
+    h('div',{class:'field'},h('label',{for:'e-n',text:'Nama kegiatan'}),h('input',{type:'text',id:'e-n',maxlength:80,value:it?it.n:'',autocomplete:'off',required:true,list:'e-sug',
+        oninput:e=>{const m=!it&&sug.get(e.target.value.trim());if(m){$('e-s').value=m.s;$('e-e').value=m.e;cat.value=m.k}}}),
+      h('datalist',{id:'e-sug'},[...sug.keys()].map(n=>h('option',{value:n}))),
+      it?null:h('span',{class:'muted',style:'font-size:.82rem',text:'Pilih dari saran untuk mengisi jam dan kategori otomatis.'})),
     h('div',{class:'two'},h('div',{class:'field'},h('label',{for:'e-s',text:'Mulai'}),timeIn('e-s',it?it.s:'08:00')),
       h('div',{class:'field'},h('label',{for:'e-e',text:'Selesai'}),timeIn('e-e',it?it.e:'09:00'))),
     h('div',{class:'field'},h('label',{for:'e-k',text:'Kategori'}),cat),
