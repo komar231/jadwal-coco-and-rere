@@ -12,3 +12,11 @@ self.addEventListener('fetch', e => {
     return r;
   }).catch(() => caches.match(e.request)));
 });
+// Mengetuk notifikasi membuka (atau memfokuskan) halaman jadwal.
+self.addEventListener('notificationclick', e => {
+  e.notification.close();
+  e.waitUntil(self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(list => {
+    const open = list.find(c => c.url.startsWith(self.registration.scope));
+    return open ? open.focus() : self.clients.openWindow(self.registration.scope);
+  }));
+});

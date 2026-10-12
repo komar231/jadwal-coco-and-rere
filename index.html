@@ -443,6 +443,39 @@ function applyWall(){const k=wallKey(),R=document.documentElement;let v='';
     if(PHOTO.test(d)){const sc='color-mix(in srgb,var(--bg) 68%,transparent)';v='linear-gradient('+sc+','+sc+'),url("'+d+'") center/cover no-repeat'}}
   else if(WALLS[k])v=WALLS[k][1];
   if(v)R.style.setProperty('--wall',v);else R.style.removeProperty('--wall')}
+/* Notifikasi dibuat oleh halaman ini sendiri, jadi hanya muncul selama halaman masih terbuka di perangkat ini */
+const NDEF={on:false,start:true,end:true,partner:false};
+function nset(){try{return Object.assign({},NDEF,JSON.parse(localStorage.getItem('jb-notif')||'{}'))}catch(e){return Object.assign({},NDEF)}}
+function nsave(o){lsSet('jb-notif',JSON.stringify(o))}
+const nOk=()=>'Notification' in window&&Notification.permission==='granted';
+async function notify(title,body,tag){
+  try{const reg='serviceWorker' in navigator?await navigator.serviceWorker.getRegistration():null;
+    if(reg&&reg.showNotification)await reg.showNotification(title,{body,tag,renotify:true});else new Notification(title,{body,tag})}
+  catch(e){}}
+function endBody(mineToo,its,m){const nx=its.find(x=>mins(x.s)>=m);
+  return(mineToo?'Centang kalau sudah selesai. ':'')+(nx?'Berikutnya '+nx.s+' '+nx.n+'.':'Jadwal hari ini sudah habis.')}
+let lastTick=Date.now()-60000;
+function tick(){const o=nset(),now=Date.now(),from=Math.max(lastTick,now-6*60000);lastTick=now;
+  if(!o.on||!nOk()||!S.me)return;
+  const t=today(),base=parse(t).getTime(),ev=[];let fired;
+  try{fired=JSON.parse(localStorage.getItem('jb-fired')||'{}')}catch(e){fired={}}
+  if(fired.d!==t||!fired.k)fired={d:t,k:{}};
+  (o.partner?['a','b']:[S.me]).forEach(sl=>{const P=S.prof[sl];if(!P)return;
+    const own=sl===S.me,who=own?'':pname(sl)+' ',its=dayItems(P,dow(t)),cap=s=>who?who+s.toLowerCase():s;
+    its.forEach(x=>{
+      if(o.start)ev.push({at:base+mins(x.s)*60000,k:sl+x.id+'s',title:cap('Mulai')+': '+x.n,body:x.s+' sampai '+x.e+(endM(x)>1440?' besok':'')});
+      if(o.end&&endM(x)<1440)ev.push({at:base+endM(x)*60000,k:sl+x.id+'e',title:cap('Selesai')+': '+x.n,body:endBody(own,its,endM(x))})});
+    if(o.end)dayItems(P,prevDay(dow(t))).filter(x=>endM(x)>=1440).forEach(x=>
+      ev.push({at:base+(endM(x)-1440)*60000,k:sl+x.id+'o',title:cap('Selesai')+': '+x.n,body:endBody(own,its,endM(x)-1440)}))});
+  let ch=false;
+  ev.forEach(e=>{if(e.at>from&&e.at<=now&&!fired.k[e.k]){fired.k[e.k]=1;ch=true;notify(e.title,e.body,e.k)}});
+  if(ch)lsSet('jb-fired',JSON.stringify(fired))}
+function toggleNotif(){const o=nset();
+  if(o.on&&nOk()){o.on=false;nsave(o);render();return}
+  Notification.requestPermission().then(p=>{
+    if(p==='granted'){o.on=true;nsave(o);notify('Jadwal Berdua','Notifikasi aktif di perangkat ini.','aktif')}
+    else toast('Izin notifikasi ditolak. Izinkan lewat pengaturan situs di browser, lalu coba lagi.');
+    render()})}
 /* Latar disimpan di ruang supaya sama di semua perangkat; salinan lokal hanya untuk tampil cepat saat dibuka */
 function storeWall(w){lsSet('jb-wall',w.key);if(w.key==='photo')lsSet('jb-wall-img',w.img);applyWall()}
 function setWall(w){storeWall(w);put('settings/wall',Object.assign({by:S.me,ts:Date.now()},w));render()}
@@ -675,7 +708,7 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
     h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'sw-me',onclick:()=>arm('swme',()=>{lsSet('jb-me',other(S.me));location.reload()})},S.arm==='swme'?'Ketuk lagi untuk pindah profil':'Pindah ke profil satunya'),
       h('button',{class:'btn danger',type:'button',id:'rm-out',onclick:()=>arm('out',()=>{lsSet('jb-room',null);lsSet('jb-me',null);lsSet('jb-cache',null);location.reload()})},S.arm==='out'?'Ketuk lagi untuk keluar':'Keluar dari ruang di perangkat ini')));
   if(!P||!can)return[P?null:(sl&&can?setupCard(sl):empty('Pengaturan belum tersedia',S.db?'Buat profilmu dulu, atau minta akses Editor.':'Sambungkan dulu ke penyimpanan bersama.')),access];
-  const acts=actNames(P);
+  const acts=actNames(P),no=nset(),nOn=no.on&&nOk();
   return[h('section',{class:'card stack'},h('h3',{text:'Profil'}),
       h('div',{class:'field'},h('label',{for:'pf-n',text:'Nama panggilan'}),h('input',{type:'text',id:'pf-n',maxlength:30,value:P.name,autocomplete:'off',onchange:e=>{const p=clone(P);p.name=e.target.value.trim().slice(0,30);updateProf(p)}})),
       h('div',{class:'field'},h('label',{for:'pf-p',text:'Foto profil'}),h('div',{class:'btns',style:'align-items:center'},avatar(sl,56),
@@ -684,6 +717,14 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
           readImg(f,160,true,.82).then(d=>{const p=clone(S.prof[sl]);p.photo=d;updateProf(normProf(p));toast('Foto profil diganti.')},()=>toast('Gambar itu tidak bisa dibaca.'))}}),
         P.photo?h('button',{class:'btn',type:'button',id:'pf-px',onclick:()=>{const p=clone(P);delete p.photo;updateProf(p)}},'Hapus foto'):null)),
       h('div',{class:'field'},h('label',{text:'Warna profil'}),h('div',{class:'sws',role:'group','aria-label':'Warna profil'},Object.keys(COLORS).map(c=>h('button',{type:'button',id:'col-'+c,style:'--c:var(--c-'+c+')','aria-pressed':String(P.color===c),'aria-label':COLORS[c],title:COLORS[c],onclick:()=>{const p=clone(P);p.color=c;updateProf(p)}}))))),
+    h('section',{class:'card stack'},h('h3',{text:'Notifikasi'}),
+      h('p',{class:'muted',style:'max-width:65ch',text:'Pemberitahuan muncul saat kegiatan mulai dan selesai, selama halaman ini masih terbuka di perangkat ini (boleh di tab lain atau diminimalkan). Nyalakan di tiap perangkat yang ingin kamu pakai.'}),
+      !('Notification' in window)?h('p',{class:'notice warn',text:'Browser ini tidak mendukung notifikasi.'}):[
+        h('div',{class:'btns'},h('button',{class:'btn'+(nOn?'':' pri'),type:'button',id:'nf-on',onclick:toggleNotif},nOn?'Matikan notifikasi di perangkat ini':'Nyalakan notifikasi di perangkat ini'),
+          nOn?h('button',{class:'btn',type:'button',id:'nf-test',onclick:()=>notify('Jadwal Berdua','Notifikasi berfungsi di perangkat ini.','uji')},'Kirim notifikasi uji'):null),
+        Notification.permission==='denied'?h('p',{class:'notice warn',text:'Izin notifikasi untuk situs ini sedang diblokir. Buka pengaturan situs di browser dan izinkan notifikasi.'}):null,
+        nOn?[['start','nf-s','Saat kegiatan mulai'],['end','nf-e','Saat kegiatan selesai'],['partner','nf-p','Juga untuk kegiatan '+pname(other(sl))]].map(c=>
+          h('label',{class:'line',for:c[1]},h('input',{type:'checkbox',id:c[1],checked:no[c[0]],onchange:e=>{const o=nset();o[c[0]]=e.target.checked;nsave(o)}}),c[2])):null]),
     h('section',{class:'card stack'},h('h3',{text:'Latar halaman'}),
       h('p',{class:'muted',style:'max-width:65ch',text:'Latar berlaku untuk kalian berdua di semua perangkat. Siapa pun dari kalian bisa menggantinya.'+(wallKey()==='photo'?' Saat ini memakai fotomu sendiri.':'')}),
       h('div',{class:'sws',role:'group','aria-label':'Latar halaman'},Object.keys(WALLS).map(k=>h('button',{type:'button',id:'wl-'+k,style:'background:'+(WALLS[k][1]||'var(--bg)'),
@@ -782,6 +823,7 @@ const hash=location.hash.slice(1);if(VIEWS[hash])S.tab=hash;
 try{S.room=localStorage.getItem('jb-room')}catch(e){}
 if(/^r-[A-Za-z0-9]{12,40}$/.test(hash)){S.room=hash.slice(2);lsSet('jb-room',S.room);try{history.replaceState(null,'',location.pathname)}catch(e){}}
 if('serviceWorker' in navigator&&location.protocol==='https:')navigator.serviceWorker.register('sw.js').catch(()=>{});
+setInterval(tick,20000);
 loadCache();
 applyWall();
 render();
