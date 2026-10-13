@@ -311,7 +311,9 @@ function normProf(p){if(!p||typeof p!=='object')return null;
   const o={name:str(p.name,30).trim(),color:COLORS[p.color]?p.color:'nila',start:DATE.test(p.start)?p.start:today(),items,targets,seq:Math.max(p.seq|0,items.length)};
   if(typeof p.photo==='string'&&p.photo.length<90000&&PHOTO.test(p.photo))o.photo=p.photo;
   if(DATE.test(p.frozen))o.frozen=p.frozen;
-  if(Array.isArray(p.sugAdd))o.sugAdd=p.sugAdd.map(x=>normItem(Object.assign({id:'s',d:0},x))).filter(Boolean).slice(0,60).map(x=>({n:x.n,s:x.s,e:x.e,k:x.k}));
+  if(Array.isArray(p.sugAdd))o.sugAdd=p.sugAdd.map(x=>normItem(Object.assign({id:'s',d:0},x))).filter(Boolean).slice(0,150).map(x=>({n:x.n,s:x.s,e:x.e,k:x.k}));
+  if(p.sugFixed===true)o.sugFixed=true;
+  if(p.sugLock===true)o.sugLock=true;
   if(Array.isArray(p.sugHide))o.sugHide=p.sugHide.map(x=>str(x,80)).filter(Boolean).slice(0,300);
   return o}
 function normLog(l){if(!l||typeof l!=='object'||!DATE.test(l.date))return null;
@@ -439,6 +441,8 @@ function recurring(sl,name){const P=S.prof[sl],L=S.logs[sl];
 /* Saran nama untuk editor: semua kegiatan di jadwal dan di riwayat, yang paling sering muncul lebih dulu */
 function suggest(sl){const m=new Map(),add=x=>{const c=m.get(x.n);if(c)c.c++;else m.set(x.n,{s:x.s,e:x.e,k:x.k,c:1})};
   const P=S.prof[sl],hide=new Set(P.sugHide||[]),out=new Map();
+  /* Setelah dikunci sekali, daftar hanya berisi yang disimpan dan tidak lagi bertambah dari jadwal atau riwayat */
+  if(P.sugFixed)return new Map((P.sugAdd||[]).map(x=>[x.n,{s:x.s,e:x.e,k:x.k,c:0}]));
   P.items.forEach(add);Object.values(S.logs[sl]).forEach(l=>(l.items||[]).forEach(add));
   (P.sugAdd||[]).forEach(x=>out.set(x.n,{s:x.s,e:x.e,k:x.k,c:0,own:true}));
   [...m].sort((a,b)=>b[1].c-a[1].c).forEach(p=>{if(!hide.has(p[0])&&!out.has(p[0]))out.set(p[0],p[1])});
@@ -732,7 +736,12 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
   if(!P||!can)return[P?null:(sl&&can?setupCard(sl):empty('Pengaturan belum tersedia',S.db?'Buat profilmu dulu, atau minta akses Editor.':'Sambungkan dulu ke penyimpanan bersama.')),access];
   const acts=actNames(P,sl),no=nset(),nOn=no.on&&nOk(),sg=[...suggest(sl)],nHide=(P.sugHide||[]).length;
   const sgk=h('select',{id:'sg-k','aria-label':'Kategori saran baru'},Object.keys(CATS).map(k=>h('option',{value:k},CATS[k])));sgk.value='rutin';
-  const sgDrop=(n)=>{const p=clone(P);p.sugAdd=(p.sugAdd||[]).filter(x=>x.n!==n);p.sugHide=(p.sugHide||[]).filter(x=>x!==n).concat(n);updateProf(p)};
+  const locked=!!P.sugLock;
+  const sgDrop=n=>{const p=clone(P);p.sugAdd=(p.sugAdd||[]).filter(x=>x.n!==n);if(!p.sugFixed)p.sugHide=(p.sugHide||[]).filter(x=>x!==n).concat(n);updateProf(p)};
+  const sgLock=on=>{const p=clone(P);
+    if(on){p.sugAdd=sg.map(q=>({n:q[0],s:q[1].s,e:q[1].e,k:q[1].k}));p.sugHide=[];p.sugFixed=true}
+    p.sugLock=on;updateProf(p);toast(on?'Daftar saran dikunci.':'Daftar saran bisa diubah.')};
+  const sgAuto=()=>{const p=clone(P);p.sugAdd=[];p.sugHide=[];p.sugFixed=false;p.sugLock=false;updateProf(p);toast('Daftar saran diisi ulang dari jadwal dan riwayat.')};
   const sgAdd=()=>{const n=$('sg-n').value.trim().slice(0,80),st=fixTime($('sg-s').value),en=fixTime($('sg-e').value);
     if(!n){toast('Isi nama kegiatan untuk saran baru.');return}
     if(!st||!en||st===en){toast('Isi jam mulai dan jam selesai yang berbeda.');return}
@@ -773,16 +782,22 @@ function viewAtur(){const sl=S.me,P=sl?S.prof[sl]:null,can=sl?mine(sl):false;
         h('input',{type:'number',id:'tg-newt',min:1,max:99,value:7,'aria-label':'Jumlah per minggu'}),
         h('button',{class:'btn',type:'submit',id:'tg-add'},'Tambah'))),
     h('section',{class:'card stack'},h('h3',{text:'Saran kegiatan'}),
-      h('p',{class:'muted',style:'max-width:65ch',text:'Daftar ini muncul sebagai saran saat kamu menambah kegiatan. Isinya otomatis dari jadwal dan riwayatmu, dan bisa kamu tambah atau hapus sendiri. Menghapus saran tidak menghapus kegiatan dari jadwal.'}),
+      h('p',{class:'muted',style:'max-width:65ch',text:'Daftar ini muncul sebagai saran saat kamu menambah kegiatan. '+(locked?'Daftar terkunci: isinya tetap dan tidak bertambah sendiri. Ketuk Ubah daftar untuk menambah atau menghapus.'
+        :P.sugFixed?'Daftar sedang bisa diubah, dan isinya tidak bertambah sendiri. Kunci lagi setelah selesai.'
+        :'Saat ini daftar terisi otomatis dari jadwal dan riwayatmu, jadi ikut bertambah tiap kamu membuat kegiatan baru. Hapus yang tidak perlu, tambah yang kurang, lalu ketuk Kunci daftar supaya isinya tetap.')+' Menghapus saran tidak menghapus kegiatan dari jadwal.'}),
       sg.length?h('div',{class:'sugl'},sg.map((p,i)=>h('div',{class:'sugr'},
           h('span',null,p[0],' ',h('small',{class:'muted',text:p[1].s+'–'+p[1].e+' · '+CATS[p[1].k]+(p[1].own?' · buatanmu':'')})),
-          h('button',{class:'ib',type:'button',id:'sg-x'+i,'aria-label':'Hapus saran '+p[0],title:'Hapus saran',onclick:()=>sgDrop(p[0])},icon('<path d="M6 6l12 12M18 6L6 18"/>')))))
-        :h('p',{class:'muted',text:'Belum ada saran. Tambahkan lewat formulir di bawah.'}),
-      nHide?h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'sg-re',onclick:()=>{const p=clone(P);p.sugHide=[];updateProf(p)}},'Pulihkan '+nHide+' saran yang dihapus')):null,
-      h('form',{class:'sugf',onsubmit:e=>{e.preventDefault();sgAdd()}},
+          locked?h('span'):h('button',{class:'ib',type:'button',id:'sg-x'+i,'aria-label':'Hapus saran '+p[0],title:'Hapus saran',onclick:()=>sgDrop(p[0])},icon('<path d="M6 6l12 12M18 6L6 18"/>')))))
+        :h('p',{class:'muted',text:locked?'Daftar saran kosong.':'Belum ada saran. Tambahkan lewat formulir di bawah.'}),
+      nHide&&!locked?h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'sg-re',onclick:()=>{const p=clone(P);p.sugHide=[];updateProf(p)}},'Pulihkan '+nHide+' saran yang dihapus')):null,
+      locked?null:h('form',{class:'sugf',onsubmit:e=>{e.preventDefault();sgAdd()}},
         h('input',{type:'text',id:'sg-n',maxlength:80,placeholder:'Nama kegiatan baru','aria-label':'Nama saran baru',autocomplete:'off'}),
         timeIn('sg-s','08:00'),timeIn('sg-e','09:00'),sgk,
-        h('button',{class:'btn',type:'submit',id:'sg-add'},'Tambah'))),
+        h('button',{class:'btn',type:'submit',id:'sg-add'},'Tambah')),
+      h('div',{class:'btns'},
+        locked?h('button',{class:'btn',type:'button',id:'sg-unlock',onclick:()=>sgLock(false)},'Ubah daftar')
+          :h('button',{class:'btn pri',type:'button',id:'sg-lock',onclick:()=>sgLock(true)},'Kunci daftar'),
+        P.sugFixed&&!locked?h('button',{class:'btn danger',type:'button',id:'sg-auto',onclick:()=>arm('sgauto',sgAuto)},S.arm==='sgauto'?'Ketuk lagi untuk mengisi ulang':'Isi ulang otomatis dari jadwal'):null)),
     h('section',{class:'card stack'},h('h3',{text:'Cadangan data'}),
       h('p',{class:'muted',style:'max-width:65ch',text:'Ekspor menyimpan profil dan seluruh riwayat centangmu ke satu berkas JSON. Impor menimpa profilmu dengan isi berkas itu.'}),
       h('div',{class:'btns'},h('button',{class:'btn',type:'button',id:'ex',onclick:exportData},'Ekspor JSON'),
